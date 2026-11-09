@@ -128,6 +128,8 @@ const SIZE_PARAMETERS = new Set( ['w', 'h', 'mw', 'mh'] );
 
 const STORED_DATE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
 
+const COMBINING_MARKS = new RegExp( '\\p{Mn}', 'gu' );
+
 const LINE_SEPARATOR = String.fromCharCode( 0x2028 );
 
 const PARAGRAPH_SEPARATOR = String.fromCharCode( 0x2029 );
@@ -205,7 +207,7 @@ export class Slug {
 
 	/** The name's slug, whose text is empty when nothing survives sanitising. */
 	static from( name: string ): Slug {
-		const letters = name.toLowerCase().normalize( 'NFD' ).replace( /\p{Mn}/gu, '' ).normalize( 'NFC' );
+		const letters = name.toLowerCase().normalize( 'NFD' ).replace( COMBINING_MARKS, '' ).normalize( 'NFC' );
 
 		return new Slug( trim( letters.replace( /[^a-z0-9]+/g, '-' ), '-' ) );
 	}

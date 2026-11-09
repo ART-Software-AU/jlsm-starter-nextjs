@@ -6,16 +6,14 @@
 	"license": "MIT",
 	"type": "module",
 	"scripts": {
-		"test": "vitest run",
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {
+		"@sitecore-content-sdk/nextjs": "1.6.2",
 		"@types/node": "24.6.0",
-		"@types/react": "19.2.2",
-		"@types/react-dom": "19.2.2",
-		"react": "19.2.0",
-		"react-dom": "19.2.0",
-		"typescript": "5.9.3",
-		"vitest": "3.2.4"
+		"@types/react": "19.2.18",
+		"next": "15.5.29",
+		"react": "19.2.9",
+		"typescript": "5.9.3"
 	}
 }

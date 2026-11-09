@@ -11,7 +11,11 @@
 		"forceConsistentCasingInFileNames": true,
 		"isolatedModules": true,
 		"noEmit": true,
-		"types": ["node"]
+		"types": ["node"],
+		"baseUrl": ".",
+		"paths": {
+			"lib/*": ["src/lib/*"]
+		}
 	},
-	"include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"]
+	"include": ["src/**/*.ts", "src/**/*.tsx", "app-router/**/*.tsx", "pages-router/**/*.tsx"]
 }
