@@ -13,8 +13,8 @@ steps in order and change nothing else.
    Copy `app-router/src/components/json-ld/JSON-LD.tsx` (App Router) or
    `pages-router/src/components/json-ld/JSON-LD.tsx` (Pages Router) to the head's
    `src/components/json-ld/JSON-LD.tsx`. Copy the bytes; do not retype any file, because `jsonld.ts` holds
-   escape sequences that retyping can corrupt. Do not rename `JSON-LD.tsx` as this is auto-registered in
-   Sitecore during the onboarding sequence.
+   escape sequences that retyping can corrupt. Do not rename `JSON-LD.tsx`: the component map takes its key
+   from the file name, and the key must be `JSON-LD`, the rendering's component name in Sitecore.
 4. Run `npm run sitecore-tools:generate-map` (or `npm run dev`). Confirm `.sitecore/component-map.ts` has
    `['JSON-LD', { ...JSONLD }]`. If the head's scripts do not run `generate-map`, add
    `import * as JSONLD from 'src/components/json-ld/JSON-LD';` and that entry by hand. Do not add it to

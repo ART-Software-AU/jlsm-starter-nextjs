@@ -9,7 +9,7 @@ placeholder; the first `JSON-LD` rendering on the page writes one `<script type=
 holding every graph on the page, in the **body**.
 
 These instructions are written for the Next.js examples in Sitecore's
-[`sitecore-xmcloud-starter-js`](https://github.com/Sitecore/sitecore-xmcloud-starter-js) repository:
+[`xmcloud-starter-js`](https://github.com/Sitecore/xmcloud-starter-js) repository:
 `examples/basic-nextjs` (App Router), `examples/basic-nextjs-pages-router` (Pages Router) and the
 `kit-nextjs-*` kits. A head made with `create-content-sdk-app` has the same layout and component map.
 
@@ -26,8 +26,9 @@ It is a drop-in, not a package: you copy three files into your head and own them
 
 ## 1. Add the placeholder to `Layout.tsx`
 
-Render a placeholder with the key `jlsm-jsonld` in `src/Layout.tsx`, before the header. The key is set in
-JLSM Settings on the dashboard; if you change it there, use the same key here.
+Render a placeholder with the key `jlsm-jsonld` in `src/Layout.tsx`, before the header. The key is chosen
+when JLSM is set up, `jlsm-jsonld` unless you chose another, and JLSM's Developer screen shows it and can
+change it. Use the same key here, and change it here too if you change it there.
 
 **App Router** (`examples/basic-nextjs`):
 
@@ -116,11 +117,11 @@ JLSM's Plugin Setup already creates and registers everything Sitecore needs. The
 | Item | Path |
 |---|---|
 | The `JSON-LD` rendering (Json Rendering, component name `JSON-LD`) | `/sitecore/layout/Renderings/Feature/JSON-LD/JSON-LD` |
-| The placeholder settings for `jlsm-jsonld`, allowing only the `JSON-LD` rendering | `/sitecore/layout/Placeholder Settings/Feature/JSON-LD/JSON-LD` |
-| `jlsm-jsonld` in the Headless Layout's Layout Service Placeholders, so every page returns it | `/sitecore/layout/Layouts/Foundation/JSS Experience Accelerator/Presentation/JSS Layout` |
+| The placeholder settings for the key, allowing only the `JSON-LD` rendering | `/sitecore/layout/Placeholder Settings/Feature/JSON-LD/JSON-LD`, or `…/Feature/JSON-LD/<your key>` for a key other than `jlsm-jsonld` |
+| The key in the Headless Layout's Layout Service Placeholders, so every page returns it | `/sitecore/layout/Layouts/Foundation/JSS Experience Accelerator/Presentation/JSS Layout` |
 
 Publish the layout and the placeholder settings folder after Plugin Setup runs. On a tenant without the
-Headless Layout, Plugin Setup asks you to add `jlsm-jsonld` to your own layout's placeholders.
+Headless Layout, Plugin Setup asks you to add the key to your own layout's placeholders.
 
 > **Do not rename the rendering or change its Component Name.** The head finds JSON-LD renderings by the
 > name `JSON-LD`: it is the component map key, and the engine walks the layout for components of that name.
@@ -157,6 +158,11 @@ what the published page carries. Its outer element has `class="jsonld-marker"`.
 This renderer reads contract **2**: the datasource carries `jsonTemplate`, `references`, `jlsmSiteRoot`,
 `jlsmDefaultLanguage` and `jlsmContract`. A datasource on another contract emits nothing. Upgrade the app,
 republish every graph, then copy the new files here.
+
+A list that repeats over the items a page field selects, such as an Article's `about` bound to its tags,
+also needs the datasource's `jlsmRepeats` field, which a graph carries only when it has such a list. These
+lists kept contract 2, so an engine copied before they were added does not warn: it leaves those properties
+out of the page. If your `jsonld.ts` has no `jlsmRepeats` in it, copy the engine from this repository again.
 
 ## Checking it
 

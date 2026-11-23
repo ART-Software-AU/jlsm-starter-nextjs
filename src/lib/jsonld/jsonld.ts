@@ -39,7 +39,7 @@ export interface ComponentRendering {
 
 export type PlaceholderData = Record<string, Array<ComponentRendering | Record<string, unknown>>>;
 
-/** Where the engine reports a component it emits nothing for. */
+/** Where the engine warns of a component on another contract, which it emits nothing for, and of a failed date read. */
 export interface JsonLdLogger {
 	warn( message: string ): void;
 }
@@ -50,7 +50,8 @@ export const consoleLogger: JsonLdLogger = { warn: message => console.warn( `[js
 
 /**
  * When the page's item was created and last changed, as Sitecore stores them (`20260902T040111Z`). The
- * layout wire does not carry them, so the head reads them itself, with {@link readPageDates}.
+ * layout service does not send them unless a rendering's own query adds them under `data.page`, so the head
+ * reads them itself, with {@link readPageDates}.
  */
 export interface PageItemDates {
 	created?: string | null;
@@ -99,8 +100,11 @@ export const DEFAULT_LANGUAGE_FIELD = 'jlsmDefaultLanguage';
 /** The datasource field stating the contract the template was compiled for. */
 export const CONTRACT_FIELD = 'jlsmContract';
 
-/** The datasource field the integrated query writes the page block under. */
+/** The component field a rendering's own GraphQL query writes a page block under; JSON-LD Schema Manager's rendering has no such query. */
 export const DATA_FIELD = 'data';
+
+/** The datasource field naming, for each `each:` key, the page field it repeats over and the entry it publishes per item. */
+export const REPEATS_FIELD = 'jlsmRepeats';
 
 /** The character a token opens with. */
 export const SENTINEL = String.fromCharCode( 0x2663 );
@@ -125,6 +129,14 @@ const TEMPLATE_LIMIT = 256;
 const UNSAFE = new RegExp( `[<>&/${String.fromCharCode( 0x2028, 0x2029 )}]`, 'g' );
 
 const SIZE_PARAMETERS = new Set( ['w', 'h', 'mw', 'mh'] );
+
+const EACH_KEY = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+const EACH_KEY_LIMIT = 100;
+
+const ID_KEY = '@id';
+
+const SCHEME_SEPARATOR = '://';
 
 const STORED_DATE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
 
@@ -268,7 +280,8 @@ const PAGE_KEYS: readonly PageKey[] = ['url', 'language', 'created', 'updated'];
 
 /**
  * A value in a compiled template that names something on the page, written as the sentinel, a source, a colon
- * and a key. Only a string opening with the sentinel is a token, and its source and key are matched exactly.
+ * and a key. Only a string opening with the sentinel is a token. Its source and key are matched exactly,
+ * except a record's id, which matches with or without braces and dashes, in either case.
  */
 export abstract class RenderToken {
 	static readonly SENTINEL = SENTINEL;
@@ -296,7 +309,24 @@ export abstract class RenderToken {
 
 		if ( expression.startsWith( 'page:' ) ) return RenderToken.parsePage( expression.slice( 5 ) );
 
+		if ( expression.startsWith( 'each:' ) ) return EachToken.parse( expression.slice( 5 ) );
+
+		if ( expression.startsWith( 'selected:' ) ) return SelectedToken.parse( expression.slice( 9 ) );
+
 		return null;
+	}
+
+	/** A field key split into the field's name and the member a `/src` or `/href` suffix names. */
+	protected static split( key: string ): { name: string; member: FieldMember } {
+		const slash = key.lastIndexOf( '/' );
+		const member = FIELD_MEMBERS.find( candidate => slash >= 0 && key.slice( slash + 1 ) === candidate );
+
+		return member === undefined ? { name: key, member: 'value' } : { name: key.slice( 0, slash ), member };
+	}
+
+	/** The suffix a field key carries for the member. */
+	protected static memberText( member: FieldMember ): string {
+		return member === 'value' ? '' : `/${member}`;
 	}
 
 	private static parsePage( key: string ): RenderToken | null {
@@ -317,19 +347,78 @@ export class FieldToken extends RenderToken {
 	}
 
 	static parse( key: string ): FieldToken | null {
-		const slash = key.lastIndexOf( '/' );
-		const member = FIELD_MEMBERS.find( candidate => slash >= 0 && key.slice( slash + 1 ) === candidate );
-		const field = member === undefined ? key : key.slice( 0, slash );
+		const { name, member } = RenderToken.split( key );
 
-		return field.length === 0 ? null : new FieldToken( field, member );
+		return name.length === 0 ? null : new FieldToken( name, member );
 	}
 
 	get text(): string {
-		return `${SENTINEL}field:${this.field}${this.member === 'value' ? '' : `/${this.member}`}`;
+		return `${SENTINEL}field:${this.field}${RenderToken.memberText( this.member )}`;
 	}
 
 	valueIn( block: ReferenceBlock ): JsonValue | null {
 		return block.fieldValue( this.field, this.member );
+	}
+}
+
+/**
+ * `each:<key>`: a list bound to a page field that selects items, such as a multi-select or a Droplink,
+ * published as one entry per selected item from the `jlsmRepeats` entry under the key, less any entry that
+ * repeats an earlier one or its `@id`. It names no single value; the template expands it.
+ */
+export class EachToken extends RenderToken {
+	constructor( readonly key: string ) {
+		super();
+	}
+
+	/** True when the key may name a repeat: a letter or digit, then letters, digits, `.`, `_` or `-`, at most 100 in all. */
+	static isKey( key: unknown ): key is string {
+		return typeof key === 'string' && key.length <= EACH_KEY_LIMIT && EACH_KEY.test( key );
+	}
+
+	static parse( key: string ): EachToken | null {
+		return EachToken.isKey( key ) ? new EachToken( key ) : null;
+	}
+
+	get text(): string {
+		return `${SENTINEL}each:${this.key}`;
+	}
+
+	valueIn(): JsonValue | null {
+		return null;
+	}
+}
+
+/** What of the item being repeated a selected token reads. */
+export type SelectedPart = 'displayName' | 'name' | 'field';
+
+/**
+ * `selected:displayName`, `selected:name` or `selected:field:<name>`, optionally with `/src` or `/href`: a value
+ * of the item a repeat is publishing an entry for. Outside a repeat it names nothing.
+ */
+export class SelectedToken extends RenderToken {
+	constructor( readonly part: SelectedPart, readonly field = '', readonly member: FieldMember = 'value' ) {
+		super();
+	}
+
+	static parse( key: string ): SelectedToken | null {
+		if ( key === 'displayName' || key === 'name' ) return new SelectedToken( key );
+
+		if ( !key.startsWith( 'field:' ) ) return null;
+
+		const { name, member } = RenderToken.split( key.slice( 6 ) );
+
+		return name.length === 0 ? null : new SelectedToken( 'field', name, member );
+	}
+
+	get text(): string {
+		if ( this.part !== 'field' ) return `${SENTINEL}selected:${this.part}`;
+
+		return `${SENTINEL}selected:field:${this.field}${RenderToken.memberText( this.member )}`;
+	}
+
+	valueIn( block: ReferenceBlock ): JsonValue | null {
+		return block.selectedValue( this.part, this.field, this.member );
 	}
 }
 
@@ -435,6 +524,11 @@ export class CompiledTemplate {
 			return null;
 		}
 
+		return CompiledTemplate.of( root );
+	}
+
+	/** A template over a tree already parsed, which it freezes and never changes. */
+	static of( root: JsonValue ): CompiledTemplate {
 		const tokens = new Map<string, RenderToken | null>();
 
 		return new CompiledTemplate( root, CompiledTemplate.collect( root, tokens ), tokens );
@@ -505,7 +599,8 @@ export class CompiledTemplate {
 
 	private valueOf( value: JsonValue, block: ReferenceBlock, depth: number ): JsonValue | undefined {
 		if ( typeof value === 'string' && value.startsWith( SENTINEL ) ) {
-			const found = this.tokens.get( value )?.valueIn( block ) ?? null;
+			const token = this.tokens.get( value ) ?? null;
+			const found = token instanceof EachToken ? CompiledTemplate.expanded( token, block, depth ) : token?.valueIn( block ) ?? null;
 
 			return found === null || ( typeof found === 'string' && found.trim().length === 0 ) ? undefined : found;
 		}
@@ -516,6 +611,169 @@ export class CompiledTemplate {
 
 		return value;
 	}
+
+	/**
+	 * The entries a repeat publishes: its entry resolved once per item the page field selects, at the depth an
+	 * entry of a literal list sits, with an entry identical to an earlier one, or carrying an earlier one's `@id`,
+	 * left out. Null inside a repeat, for a key no repeat names, or when no entry is left.
+	 */
+	private static expanded( each: EachToken, block: ReferenceBlock, depth: number ): JsonValue[] | null {
+		if ( block.inRepeat ) return null;
+
+		const repeat = block.repeats.get( each.key );
+
+		if ( repeat === null ) return null;
+
+		const entries: JsonValue[] = [];
+		const published = new Set<string>();
+		const ids = new Set<string>();
+
+		for ( const item of block.selectedIn( repeat.field ) ) {
+			const resolved = repeat.entry.entryFor( block.withSelected( item ), depth + 1 );
+			const text = resolved === undefined ? null : JSON.stringify( resolved );
+
+			if ( resolved === undefined || text === null || published.has( text ) ) continue;
+
+			const id = isJsonObject( resolved ) && typeof resolved[ID_KEY] === 'string' ? resolved[ID_KEY] : null;
+
+			if ( id !== null && ids.has( id ) ) continue;
+
+			published.add( text );
+
+			if ( id !== null ) ids.add( id );
+
+			entries.push( resolved );
+		}
+
+		return entries.length === 0 ? null : entries;
+	}
+
+	/** The entry for one selected item, its own `@id` removed unless it is a web address, and dropped if that leaves it saying nothing. */
+	private entryFor( selected: ReferenceBlock, depth: number ): JsonValue | undefined {
+		const kept = this.resolveValue( this.root, selected, depth );
+
+		if ( kept === undefined ) return undefined;
+
+		const entry = isJsonObject( kept ) && ID_KEY in kept && !CompiledTemplate.isWebAddress( kept[ID_KEY] ) ? CompiledTemplate.withoutId( kept ) : kept;
+
+		return sayless( entry, depth ) ? undefined : entry;
+	}
+
+	private static withoutId( entry: JsonObject ): JsonObject {
+		const copy = { ...entry };
+
+		delete copy[ID_KEY];
+
+		return copy;
+	}
+
+	/** True for an absolute `http` or `https` address with a host, written with no surrounding whitespace. */
+	private static isWebAddress( value: unknown ): boolean {
+		if ( typeof value !== 'string' || value.length === 0 || value !== value.trim() ) return false;
+
+		const schemeEnd = value.indexOf( SCHEME_SEPARATOR );
+
+		if ( schemeEnd < 0 ) return false;
+
+		const scheme = value.slice( 0, schemeEnd ).toLowerCase();
+
+		if ( scheme !== 'http' && scheme !== 'https' ) return false;
+
+		return CompiledTemplate.hostOf( value.slice( schemeEnd + SCHEME_SEPARATOR.length ) ).length > 0;
+	}
+
+	private static hostOf( afterScheme: string ): string {
+		const authority = afterScheme.split( /[/?#]/ )[0];
+		const host = authority.slice( authority.lastIndexOf( '@' ) + 1 );
+		const port = host.lastIndexOf( ':' );
+
+		return port < 0 || host.endsWith( ']' ) ? host : host.slice( 0, port );
+	}
+}
+
+/**
+ * The datasource's `jlsmRepeats`: for each `each:` key, the page field whose selected items it repeats over and
+ * the compiled entry published once per item. Read once per rendering; each entry is parsed here, once.
+ */
+export class Repeats {
+	/** No repeats at all. */
+	static readonly EMPTY = new Repeats( new Map() );
+
+	private constructor( private readonly held: ReadonlyMap<string, { field: string; entry: CompiledTemplate }> ) {}
+
+	/**
+	 * The repeats the text holds. Never throws: text that is blank, not JSON or not an object is {@link EMPTY}, and
+	 * a key that is malformed, or names no field or no entry, is left out.
+	 */
+	static parse( text: string | null | undefined ): Repeats {
+		if ( text === null || text === undefined || text.trim().length === 0 ) return Repeats.EMPTY;
+
+		let root: unknown;
+
+		try {
+			root = JSON.parse( text );
+		} catch {
+			return Repeats.EMPTY;
+		}
+
+		return isJsonObject( root ) ? new Repeats( Repeats.read( root ) ) : Repeats.EMPTY;
+	}
+
+	/** The page field and the compiled entry the key names, or null when there is none. */
+	get( key: string ): { field: string; entry: CompiledTemplate } | null {
+		return this.held.get( key ) ?? null;
+	}
+
+	private static read( root: JsonObject ): Map<string, { field: string; entry: CompiledTemplate }> {
+		const held = new Map<string, { field: string; entry: CompiledTemplate }>();
+
+		for ( const key of Object.keys( root ) ) {
+			const field = member( root[key], 'field' );
+			const entry = member( root[key], 'entry' );
+
+			if ( !EachToken.isKey( key ) || typeof field !== 'string' || field.trim().length === 0 ) continue;
+
+			if ( entry === undefined || entry === null ) continue;
+
+			held.set( key, { field, entry: CompiledTemplate.of( entry as JsonValue ) } );
+		}
+
+		return held;
+	}
+}
+
+/**
+ * One item selected in a multi-select page field, as the layout gives it. `displayName` falls back to `name`
+ * when the wire's is blank.
+ */
+export interface SelectedItem {
+	id: string;
+	name: string;
+	displayName: string;
+	fields: Record<string, unknown> | null;
+}
+
+/**
+ * The items a route field holds, in field order: each object of an array, or the one item a Droplink's object
+ * with an `id` is. Anything else, a string or a `{ value }` among them, holds none; a string is never split.
+ */
+export function selectedItemsOf( field: unknown ): SelectedItem[] {
+	if ( Array.isArray( field ) ) return field.filter( isJsonObject ).map( selectedItemOf );
+
+	return isJsonObject( field ) && 'id' in field ? [selectedItemOf( field )] : [];
+}
+
+function selectedItemOf( item: JsonObject ): SelectedItem {
+	const name = typeof item['name'] === 'string' ? item['name'] : '';
+	const displayName = item['displayName'];
+	const fields = item['fields'];
+
+	return {
+		id: typeof item['id'] === 'string' ? item['id'] : '',
+		name,
+		displayName: typeof displayName === 'string' && displayName.trim().length > 0 ? displayName : name,
+		fields: isJsonObject( fields ) ? fields : null
+	};
 }
 
 /**
@@ -658,14 +916,22 @@ export class ReferenceBlock {
 	private readonly itemPath: string;
 	private readonly dates: PageItemDates | null;
 	private readonly records: ReadonlyMap<string, JsonValue>;
+	private readonly selected: SelectedItem | null;
+
+	/** The repeats the component's `each:` tokens name, read from its `jlsmRepeats` once per rendering. */
+	readonly repeats: Repeats;
 
 	constructor(
 		private readonly component: Record<string, unknown> | undefined,
 		private readonly route: RouteData | null | undefined,
 		private readonly context: Record<string, unknown> | null | undefined,
 		dates: PageItemDates | null = null,
-		records: ReadonlyMap<string, JsonValue> = recordsOf( component ) ) {
+		records: ReadonlyMap<string, JsonValue> = recordsOf( component ),
+		repeats: Repeats = Repeats.parse( textOf( component?.[REPEATS_FIELD] ) ),
+		selected: SelectedItem | null = null ) {
 		this.records = records;
+		this.repeats = repeats;
+		this.selected = selected;
 		this.dates = dates;
 		this.fields = isJsonObject( route?.fields ) ? route.fields : {};
 		this.page = member( component, DATA_FIELD, 'page' );
@@ -680,7 +946,48 @@ export class ReferenceBlock {
 	 * wire carries under `data.page`; a date left null falls back to the wire. This block is left as it is.
 	 */
 	withPageDates( dates: PageItemDates | null | undefined ): ReferenceBlock {
-		return new ReferenceBlock( this.component, this.route, this.context, dates ?? null, this.records );
+		return new ReferenceBlock( this.component, this.route, this.context, dates ?? null, this.records, this.repeats, this.selected );
+	}
+
+	/**
+	 * A block like this one while a repeat publishes the entry for the item: selected tokens read the item, every
+	 * other token reads what it read before. This block is left as it is.
+	 */
+	withSelected( item: SelectedItem ): ReferenceBlock {
+		return new ReferenceBlock( this.component, this.route, this.context, this.dates, this.records, this.repeats, item );
+	}
+
+	/** True while a repeat publishes an entry, where a further `each:` names nothing. */
+	get inRepeat(): boolean {
+		return this.selected !== null;
+	}
+
+	/** The items the page field selects, in field order, each id once, the first kept; an item with no id is always kept. */
+	selectedIn( field: string ): SelectedItem[] {
+		const seen = new Set<string>();
+
+		return selectedItemsOf( this.fields[field] ).filter( item => {
+			const id = RecordId.of( item.id );
+
+			if ( id === null ) return true;
+
+			if ( seen.has( id.key ) ) return false;
+
+			seen.add( id.key );
+
+			return true;
+		} );
+	}
+
+	/** A value of the item a repeat is publishing an entry for, or null outside a repeat. */
+	selectedValue( part: SelectedPart, field: string, fieldPart: FieldMember ): JsonValue | null {
+		if ( this.selected === null ) return null;
+
+		if ( part === 'displayName' ) return this.selected.displayName;
+
+		if ( part === 'name' ) return this.selected.name;
+
+		return this.memberOf( member( this.selected.fields, field, 'value' ), fieldPart );
 	}
 
 	/** The value the token text names, or null when it is not a token or names nothing. */
@@ -688,11 +995,16 @@ export class ReferenceBlock {
 		return RenderToken.tryParse( text )?.valueIn( this ) ?? null;
 	}
 
-	/** A field's value, or for an image or link its URL joined to the site root. */
+	/**
+	 * A field's value, or for an image or link its URL: a root-relative URL joined to the site root when there is
+	 * one, a protocol-relative URL given `https:`, and an image's `w`, `h`, `mw` and `mh` parameters removed.
+	 */
 	fieldValue( field: string, part: FieldMember ): JsonValue | null {
-		if ( part !== 'value' ) return this.url( member( this.fields, field, 'value', part ), part );
+		return this.memberOf( member( this.fields, field, 'value' ), part );
+	}
 
-		const value = member( this.fields, field, 'value' );
+	private memberOf( value: unknown, part: FieldMember ): JsonValue | null {
+		if ( part !== 'value' ) return this.url( member( value, part ), part );
 
 		if ( isJsonObject( value ) ) {
 			if ( typeof value['src'] === 'string' ) return this.url( value['src'], 'src' );
@@ -800,7 +1112,8 @@ export class JsonLdPage {
 
 	/**
 	 * Every JSON-LD rendering on the layout, resolved and collected into one page. `dates` are the page's
-	 * dates the head read with {@link readPageDates}; without them a date token drops its key.
+	 * dates the head read with {@link readPageDates}; without them a date token falls back to `data.page`, and
+	 * drops its key when that has none.
 	 */
 	static buildPage( layout: LayoutServiceData | null | undefined, logger: JsonLdLogger = silentLogger, dates: PageItemDates | null = null ): JsonLdPage {
 		const page = new JsonLdPage();
@@ -825,10 +1138,11 @@ export class JsonLdPage {
 }
 
 /**
- * The page item's dates from published Experience Edge, for {@link JsonLdPage.buildPage}. Asks only when a
- * JSON-LD rendering on the page names a date, holds the answer for five minutes per context id, item and
- * language, and shares one read between renderings asking at once. A read that fails or outlasts the timeout
- * gives null and is not held, so the next page tries again.
+ * The page item's dates from published Experience Edge, for {@link JsonLdPage.buildPage}. Asks only when there
+ * is a context id, the route has an item id and a JSON-LD rendering on the page names a date; otherwise null.
+ * Holds the answer per context id, item and language, for five minutes unless `holdMs` says otherwise, and
+ * shares one read between renderings asking at once. A read that fails or outlasts the timeout gives null and
+ * is not held, so the next page tries again.
  */
 export async function readPageDates( layout: LayoutServiceData | null | undefined, options: PageDatesOptions ): Promise<PageItemDates | null> {
 	const route = layout?.sitecore?.route;
@@ -888,7 +1202,7 @@ export class ScriptWriter {
 	static chipText( page: JsonLdPage ): string {
 		if ( page.isEmpty ) return 'Nothing to emit yet: no graph has been saved to the datasources on this page.';
 
-		return `${grouped( page.scriptText.length )} bytes, not shown on the published page`;
+		return `${grouped( page.scriptText.length )} characters, not shown on the published page`;
 	}
 }
 
