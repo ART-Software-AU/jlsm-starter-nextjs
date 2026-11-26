@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { ATTRIBUTION, isEditing, JsonLdLogger, JsonLdPage, LayoutServiceData, PageItemDates, ScriptWriter } from './jsonld';
+import { ATTRIBUTION, ExternalValues, isEditing, JsonLdLogger, JsonLdPage, LayoutServiceData, PageItemDates, ScriptWriter } from './jsonld';
 
 export interface JsonLdScriptProps {
 	/** The layout service response for the page, as the Content SDK's `Page.layout` holds it. */
@@ -11,6 +11,9 @@ export interface JsonLdScriptProps {
 
 	/** The page's dates, as `readPageDates( layout, { contextId } )` answers them. Without them a date token drops its key. */
 	dates?: PageItemDates | null;
+
+	/** Values from outside Sitecore, for `♣external:` tokens and for tokens opening with the head's own sentinel. Without them a custom-sentinel token stays as its text and a `♣external:` token is dropped. */
+	external?: ExternalValues | null;
 }
 
 /**
@@ -18,8 +21,8 @@ export interface JsonLdScriptProps {
  * `@graph`. In the Pages editor it shows the editing chip instead. Renders nothing when the page has no
  * JSON-LD to emit.
  */
-export function JsonLdScript( { layout, logger, dates }: JsonLdScriptProps ): React.JSX.Element | null {
-	const page = JsonLdPage.buildPage( layout, logger, dates ?? null );
+export function JsonLdScript( { layout, logger, dates, external }: JsonLdScriptProps ): React.JSX.Element | null {
+	const page = JsonLdPage.buildPage( layout, logger, dates ?? null, external ?? null );
 
 	if ( isEditing( layout ) )
 		return (

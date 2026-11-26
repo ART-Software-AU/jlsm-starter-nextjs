@@ -155,14 +155,24 @@ what the published page carries. Its outer element has `class="jsonld-marker"`.
 
 ### Contract
 
-This renderer reads contract **2**: the datasource carries `jsonTemplate`, `references`, `jlsmSiteRoot`,
-`jlsmDefaultLanguage` and `jlsmContract`. A datasource on another contract emits nothing. Upgrade the app,
+This renderer reads contracts **2** and **3**. A graph for pages is on contract 2: the datasource carries
+`jsonTemplate`, `references`, `jlsmSiteRoot`, `jlsmDefaultLanguage` and `jlsmContract`. A graph that describes
+a component is on contract 3 and also carries `jlsmComponent`; it publishes only on pages that place that
+component, once or once per placement. A datasource on any other contract emits nothing. Upgrade the app,
 republish every graph, then copy the new files here.
 
-A list that repeats over the items a page field selects, such as an Article's `about` bound to its tags,
-also needs the datasource's `jlsmRepeats` field, which a graph carries only when it has such a list. These
-lists kept contract 2, so an engine copied before they were added does not warn: it leaves those properties
-out of the page. If your `jsonld.ts` has no `jlsmRepeats` in it, copy the engine from this repository again.
+Some features kept contract 2, so an engine copied before they were added does not warn: it leaves the
+property out, or publishes it as before. If any of these is missing from your page, copy the engine from this
+repository again.
+
+- A list that repeats over the items a page field selects, such as an Article's `about` bound to its tags, or
+  over the items of a component on the page. It needs the datasource's `jlsmRepeats` field, which a graph
+  carries only when it has such a list. An engine with no `jlsmRepeats` in it leaves these lists out.
+- A page field bound to a Number, Boolean, Date or Duration property. An older engine leaves every such
+  property out.
+- An entry of a repeated list whose required value is empty. This engine leaves the entry out; an older one
+  publishes it without that value.
+- A graph that describes a component. An older engine does not know contract 3 and publishes nothing for it.
 
 ## Checking it
 
